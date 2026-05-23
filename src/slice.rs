@@ -35,6 +35,18 @@ impl<'a> FixedBitCell<'a> {
     }
 
     /// # Safety
+    /// - Caller must ensures theres no other mutable aliasing
+    pub unsafe fn into_slice(self) -> FixedBitSlice<'a> {
+        FixedBitSlice(self)
+    }
+
+    /// # Safety
+    /// - Caller must ensures theres no other borrow aliasing
+    pub unsafe fn into_slice_mut(self) -> FixedBitSliceMut<'a> {
+        FixedBitSliceMut(self)
+    }
+
+    /// # Safety
     /// Caller must ensures subblock is inside the range of blocks.len()
     #[inline]
     unsafe fn get_unchecked(self, subblock: usize) -> &'a Block {
