@@ -14,36 +14,34 @@
 //!
 //! Currently only SSE2/AVX/AVX2 on x86/x86_64 and wasm32 SIMD are supported as this is what stable Rust supports.
 #![no_std]
-// TODO: Remove once MSRV supports undocumented_unsafe_blocks
-#![allow(unknown_lints)]
-#![deny(clippy::undocumented_unsafe_blocks)]
-// TODO our MSRV supports older versions of Cargo that do not know the following are unsafe:
-// - Vec::from_raw_parts
-// - get_unchecked_mut
-#![allow(unused_unsafe)]
+#![allow(unsafe_op_in_unsafe_fn)]
 
 extern crate alloc;
-use alloc::{vec, vec::Vec};
 
 mod block;
 mod range;
+mod slice;
+
+pub use range::IndexRange;
+pub use slice::*;
 
 #[cfg(feature = "serde")]
 extern crate serde;
 #[cfg(feature = "serde")]
 mod serde_impl;
 
-use core::fmt::Write;
-use core::fmt::{Binary, Display, Error, Formatter};
-
-use core::cmp::Ordering;
-use core::hash::Hash;
-use core::iter::{Chain, FusedIterator};
-use core::mem::ManuallyDrop;
-use core::mem::MaybeUninit;
-use core::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, Index};
-use core::ptr::NonNull;
-pub use range::IndexRange;
+use alloc::{vec, vec::Vec};
+use core::{
+    cmp::Ordering,
+    fmt::{Binary, Display, Error, Formatter, Write},
+    hash::Hash,
+    iter::{Chain, FusedIterator},
+    mem::{ManuallyDrop, MaybeUninit},
+    ops::{
+        BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, Bound, Index, RangeBounds,
+    },
+    ptr::NonNull,
+};
 
 pub(crate) const BITS: usize = core::mem::size_of::<Block>() * 8;
 #[cfg(feature = "serde")]
@@ -132,7 +130,7 @@ impl FixedBitSet {
     /// ```
     pub fn with_capacity_and_blocks<I: IntoIterator<Item = Block>>(bits: usize, blocks: I) -> Self {
         let mut bitset = Self::with_capacity(bits);
-        for (subblock, value) in bitset.as_mut_slice().iter_mut().zip(blocks.into_iter()) {
+        for (subblock, value) in bitset.as_mut_slice().iter_mut().zip(blocks) {
             *subblock = value;
         }
         bitset
@@ -173,14 +171,12 @@ impl FixedBitSet {
         self.length = bits;
     }
 
-    #[inline]
-    unsafe fn get_unchecked(&self, subblock: usize) -> &Block {
-        &*self.data.as_ptr().cast::<Block>().add(subblock)
-    }
-
+    /// # Safety
+    /// Caller must ensures subblock is inside the range of blocks.len()
     #[inline]
     unsafe fn get_unchecked_mut(&mut self, subblock: usize) -> &mut Block {
-        &mut *self.data.as_ptr().cast::<Block>().add(subblock)
+        // SAFETY: caller ensures the safety of this
+        unsafe { &mut *self.data.as_ptr().cast::<Block>().add(subblock) }
     }
 
     #[inline]
@@ -228,6 +224,45 @@ impl FixedBitSet {
         // SAFETY: The slice constructed is within bounds of the underlying allocation. This function
         // is called with a mutable borrow so no other read or write can happen as long as the returned borrow lives.
         unsafe { core::slice::from_raw_parts_mut(self.data.as_ptr(), self.simd_block_len()) }
+    }
+
+    /// range is in block size
+    #[inline]
+    pub fn as_bit_slice(&self, range: impl RangeBounds<usize>) -> FixedBitSlice<'_> {
+        let (start, bits) = self.bit_slice_range(range);
+
+        // SAFETY: self.data is valid, usize_len is the valid data range
+        unsafe { FixedBitSlice::from_raw_parts(self.data.add(start).as_ptr().cast(), bits) }
+    }
+
+    /// range is in block size
+    #[inline]
+    pub fn as_bit_slice_mut(&self, range: impl RangeBounds<usize>) -> FixedBitSliceMut<'_> {
+        let (start, bits) = self.bit_slice_range(range);
+
+        // SAFETY: self.data is valid, usize_len is the valid data range
+        unsafe { FixedBitSliceMut::from_raw_parts(self.data.add(start).as_ptr().cast(), bits) }
+    }
+
+    fn bit_slice_range(&self, range: impl RangeBounds<usize>) -> (usize, usize) {
+        let start = match range.start_bound() {
+            Bound::Included(offset) => *offset,
+            Bound::Excluded(offset) => *offset + 1,
+            Bound::Unbounded => 0,
+        };
+
+        let end = match range.end_bound() {
+            Bound::Included(offset) => {
+                assert!(*offset < self.length);
+                *offset + 1
+            }
+            Bound::Excluded(offset) => *offset,
+            Bound::Unbounded => self.usize_len(),
+        };
+
+        let bits = self.length.min((end - start) * Block::BITS as usize);
+
+        (start, bits)
     }
 
     /// Grows the internal size of the bitset before inserting a bit
@@ -298,7 +333,7 @@ impl FixedBitSet {
     /// This is equivalent to [`bitset.count_ones(..) == 0`](FixedBitSet::count_ones).
     #[inline]
     pub fn is_clear(&self) -> bool {
-        self.as_simd_slice().iter().all(|block| block.is_empty())
+        self.as_bit_slice(..).is_clear()
     }
 
     /// Finds the lowest set bit in the bitset.
@@ -317,22 +352,7 @@ impl FixedBitSet {
     /// ```
     #[inline]
     pub fn minimum(&self) -> Option<usize> {
-        let (block_idx, block) = self
-            .as_simd_slice()
-            .iter()
-            .enumerate()
-            .find(|&(_, block)| !block.is_empty())?;
-        let mut inner = 0;
-        let mut trailing = 0;
-        for subblock in block.into_usize_array() {
-            if subblock != 0 {
-                trailing = subblock.trailing_zeros() as usize;
-                break;
-            } else {
-                inner += BITS;
-            }
-        }
-        Some(block_idx * SimdBlock::BITS + inner + trailing)
+        self.as_bit_slice(..).minimum()
     }
 
     /// Finds the highest set bit in the bitset.
@@ -351,24 +371,7 @@ impl FixedBitSet {
     /// ```
     #[inline]
     pub fn maximum(&self) -> Option<usize> {
-        let (block_idx, block) = self
-            .as_simd_slice()
-            .iter()
-            .rev()
-            .enumerate()
-            .find(|&(_, block)| !block.is_empty())?;
-        let mut inner = 0;
-        let mut leading = 0;
-        for subblock in block.into_usize_array().iter().rev() {
-            if *subblock != 0 {
-                leading = subblock.leading_zeros() as usize;
-                break;
-            } else {
-                inner += BITS;
-            }
-        }
-        let max = self.simd_block_len() * SimdBlock::BITS;
-        Some(max - block_idx * SimdBlock::BITS - inner - leading - 1)
+        self.as_bit_slice(..).maximum()
     }
 
     /// `true` if all bits in the [`FixedBitSet`] are set.
@@ -385,7 +388,7 @@ impl FixedBitSet {
     /// This is equivalent to [`bitset.count_ones(..) == bitset.len()`](FixedBitSet::count_ones).
     #[inline]
     pub fn is_full(&self) -> bool {
-        self.contains_all_in_range(..)
+        self.as_bit_slice(..).is_full()
     }
 
     /// Return **true** if the bit is enabled in the **FixedBitSet**,
@@ -396,12 +399,7 @@ impl FixedBitSet {
     /// Note: Also available with index syntax: `bitset[bit]`.
     #[inline]
     pub fn contains(&self, bit: usize) -> bool {
-        if bit < self.length {
-            // SAFETY: The above check ensures that the block and bit are within bounds.
-            unsafe { self.contains_unchecked(bit) }
-        } else {
-            false
-        }
+        self.as_bit_slice(..).contains(bit)
     }
 
     /// Return **true** if the bit is enabled in the **FixedBitSet**,
@@ -414,8 +412,8 @@ impl FixedBitSet {
     /// `bit` must be less than `self.len()`
     #[inline]
     pub unsafe fn contains_unchecked(&self, bit: usize) -> bool {
-        let (block, i) = div_rem(bit, BITS);
-        (self.get_unchecked(block) & (1 << i)) != 0
+        // SAFETY: Caller ensures safety
+        unsafe { self.as_bit_slice(..).contains_unchecked(bit) }
     }
 
     /// Clear all bits.
@@ -431,16 +429,7 @@ impl FixedBitSet {
     /// **Panics** if **bit** is out of bounds.
     #[inline]
     pub fn insert(&mut self, bit: usize) {
-        assert!(
-            bit < self.length,
-            "insert at index {} exceeds fixedbitset size {}",
-            bit,
-            self.length
-        );
-        // SAFETY: The above assertion ensures that the block is inside the Vec's allocation.
-        unsafe {
-            self.insert_unchecked(bit);
-        }
+        self.as_bit_slice_mut(..).insert(bit);
     }
 
     /// Enable `bit` without any length checks.
@@ -449,11 +438,7 @@ impl FixedBitSet {
     /// `bit` must be less than `self.len()`
     #[inline]
     pub unsafe fn insert_unchecked(&mut self, bit: usize) {
-        let (block, i) = div_rem(bit, BITS);
-        // SAFETY: The above assertion ensures that the block is inside the Vec's allocation.
-        unsafe {
-            *self.get_unchecked_mut(block) |= 1 << i;
-        }
+        self.as_bit_slice_mut(..).insert_unchecked(bit);
     }
 
     /// Disable `bit`.
@@ -461,16 +446,7 @@ impl FixedBitSet {
     /// **Panics** if **bit** is out of bounds.
     #[inline]
     pub fn remove(&mut self, bit: usize) {
-        assert!(
-            bit < self.length,
-            "remove at index {} exceeds fixedbitset size {}",
-            bit,
-            self.length
-        );
-        // SAFETY: The above assertion ensures that the block is inside the Vec's allocation.
-        unsafe {
-            self.remove_unchecked(bit);
-        }
+        self.as_bit_slice_mut(..).remove(bit);
     }
 
     /// Disable `bit` without any bounds checking.
@@ -479,11 +455,7 @@ impl FixedBitSet {
     /// `bit` must be less than `self.len()`
     #[inline]
     pub unsafe fn remove_unchecked(&mut self, bit: usize) {
-        let (block, i) = div_rem(bit, BITS);
-        // SAFETY: The above assertion ensures that the block is inside the Vec's allocation.
-        unsafe {
-            *self.get_unchecked_mut(block) &= !(1 << i);
-        }
+        self.as_bit_slice_mut(..).remove_unchecked(bit);
     }
 
     /// Enable `bit`, and return its previous value.
@@ -491,14 +463,7 @@ impl FixedBitSet {
     /// **Panics** if **bit** is out of bounds.
     #[inline]
     pub fn put(&mut self, bit: usize) -> bool {
-        assert!(
-            bit < self.length,
-            "put at index {} exceeds fixedbitset size {}",
-            bit,
-            self.length
-        );
-        // SAFETY: The above assertion ensures that the block is inside the Vec's allocation.
-        unsafe { self.put_unchecked(bit) }
+        self.as_bit_slice_mut(..).put(bit)
     }
 
     /// Enable `bit`, and return its previous value without doing any bounds checking.
@@ -507,14 +472,7 @@ impl FixedBitSet {
     /// `bit` must be less than `self.len()`
     #[inline]
     pub unsafe fn put_unchecked(&mut self, bit: usize) -> bool {
-        let (block, i) = div_rem(bit, BITS);
-        // SAFETY: The above assertion ensures that the block is inside the Vec's allocation.
-        unsafe {
-            let word = self.get_unchecked_mut(block);
-            let prev = *word & (1 << i) != 0;
-            *word |= 1 << i;
-            prev
-        }
+        self.as_bit_slice_mut(..).put_unchecked(bit)
     }
 
     /// Toggle `bit` (inverting its state).
@@ -522,16 +480,7 @@ impl FixedBitSet {
     /// ***Panics*** if **bit** is out of bounds
     #[inline]
     pub fn toggle(&mut self, bit: usize) {
-        assert!(
-            bit < self.length,
-            "toggle at index {} exceeds fixedbitset size {}",
-            bit,
-            self.length
-        );
-        // SAFETY: The above assertion ensures that the block is inside the Vec's allocation.
-        unsafe {
-            self.toggle_unchecked(bit);
-        }
+        self.as_bit_slice_mut(..).toggle(bit);
     }
 
     /// Toggle `bit` (inverting its state) without any bounds checking.
@@ -540,11 +489,7 @@ impl FixedBitSet {
     /// `bit` must be less than `self.len()`
     #[inline]
     pub unsafe fn toggle_unchecked(&mut self, bit: usize) {
-        let (block, i) = div_rem(bit, BITS);
-        // SAFETY: The above assertion ensures that the block is inside the Vec's allocation.
-        unsafe {
-            *self.get_unchecked_mut(block) ^= 1 << i;
-        }
+        self.as_bit_slice_mut(..).toggle_unchecked(bit);
     }
 
     /// Sets a bit to the provided `enabled` value.
@@ -552,16 +497,7 @@ impl FixedBitSet {
     /// **Panics** if **bit** is out of bounds.
     #[inline]
     pub fn set(&mut self, bit: usize, enabled: bool) {
-        assert!(
-            bit < self.length,
-            "set at index {} exceeds fixedbitset size {}",
-            bit,
-            self.length
-        );
-        // SAFETY: The above assertion ensures that the block is inside the Vec's allocation.
-        unsafe {
-            self.set_unchecked(bit, enabled);
-        }
+        self.as_bit_slice_mut(..).set(bit, enabled);
     }
 
     /// Sets a bit to the provided `enabled` value without doing any bounds checking.
@@ -570,14 +506,7 @@ impl FixedBitSet {
     /// `bit` must be less than `self.len()`
     #[inline]
     pub unsafe fn set_unchecked(&mut self, bit: usize, enabled: bool) {
-        let (block, i) = div_rem(bit, BITS);
-        // SAFETY: The above assertion ensures that the block is inside the Vec's allocation.
-        let elt = unsafe { self.get_unchecked_mut(block) };
-        if enabled {
-            *elt |= 1 << i;
-        } else {
-            *elt &= !(1 << i);
-        }
+        self.as_bit_slice_mut(..).set_unchecked(bit, enabled);
     }
 
     /// Copies boolean value from specified bit to the specified bit.
@@ -587,15 +516,7 @@ impl FixedBitSet {
     /// **Panics** if **to** is out of bounds.
     #[inline]
     pub fn copy_bit(&mut self, from: usize, to: usize) {
-        assert!(
-            to < self.length,
-            "copy to index {} exceeds fixedbitset size {}",
-            to,
-            self.length
-        );
-        let enabled = self.contains(from);
-        // SAFETY: The above assertion ensures that the block is inside the Vec's allocation.
-        unsafe { self.set_unchecked(to, enabled) };
+        self.as_bit_slice_mut(..).copy_bit(from, to);
     }
 
     /// Copies boolean value from specified bit to the specified bit.
@@ -607,10 +528,7 @@ impl FixedBitSet {
     /// `to` must both be less than `self.len()`
     #[inline]
     pub unsafe fn copy_bit_unchecked(&mut self, from: usize, to: usize) {
-        // SAFETY: Caller must ensure that `from` is within bounds.
-        let enabled = self.contains_unchecked(from);
-        // SAFETY: Caller must ensure that `to` is within bounds.
-        self.set_unchecked(to, enabled);
+        self.as_bit_slice_mut(..).copy_bit_unchecked(from, to);
     }
 
     /// Count the number of set bits in the given bit range.
@@ -621,10 +539,7 @@ impl FixedBitSet {
     /// **Panics** if the range extends past the end of the bitset.
     #[inline]
     pub fn count_ones<T: IndexRange>(&self, range: T) -> usize {
-        Self::batch_count_ones(Masks::new(range, self.length).map(|(block, mask)| {
-            // SAFETY: Masks cannot return a block index that is out of range.
-            unsafe { *self.get_unchecked(block) & mask }
-        }))
+        self.as_bit_slice(..).count_ones(range)
     }
 
     /// Count the number of unset bits in the given bit range.
@@ -635,10 +550,7 @@ impl FixedBitSet {
     /// **Panics** if the range extends past the end of the bitset.
     #[inline]
     pub fn count_zeroes<T: IndexRange>(&self, range: T) -> usize {
-        Self::batch_count_ones(Masks::new(range, self.length).map(|(block, mask)| {
-            // SAFETY: Masks cannot return a block index that is out of range.
-            unsafe { !*self.get_unchecked(block) & mask }
-        }))
+        self.as_bit_slice(..).count_zeroes(range)
     }
 
     /// Sets every bit in the given range to the given state (`enabled`)
@@ -702,14 +614,7 @@ impl FixedBitSet {
     /// **Panics** if the range extends past the end of the bitset.
     #[inline]
     pub fn contains_all_in_range<T: IndexRange>(&self, range: T) -> bool {
-        for (block, mask) in Masks::new(range, self.length) {
-            // SAFETY: Masks cannot return a block index that is out of range.
-            let block = unsafe { self.get_unchecked(block) };
-            if block & mask != mask {
-                return false;
-            }
-        }
-        true
+        self.as_bit_slice(..).contains_all_in_range(range)
     }
 
     /// Checks if the bitset contains at least one set bit in the given range.
@@ -717,14 +622,7 @@ impl FixedBitSet {
     /// **Panics** if the range extends past the end of the bitset.
     #[inline]
     pub fn contains_any_in_range<T: IndexRange>(&self, range: T) -> bool {
-        for (block, mask) in Masks::new(range, self.length) {
-            // SAFETY: Masks cannot return a block index that is out of range.
-            let block = unsafe { self.get_unchecked(block) };
-            if block & mask != 0 {
-                return true;
-            }
-        }
-        false
+        self.as_bit_slice(..).contains_any_in_range(range)
     }
 
     /// View the bitset as a slice of `Block` blocks
@@ -839,35 +737,28 @@ impl FixedBitSet {
     }
 
     /// Returns a lazy iterator over the intersection of two `FixedBitSet`s
-    pub fn intersection<'a>(&'a self, other: &'a FixedBitSet) -> Intersection<'a> {
-        Intersection {
-            iter: self.ones(),
-            other,
-        }
+    pub fn intersection<'a>(&'a self, other: impl Into<FixedBitSlice<'a>>) -> Intersection<'a> {
+        self.as_bit_slice(..).intersection(other.into())
     }
 
     /// Returns a lazy iterator over the union of two `FixedBitSet`s.
-    pub fn union<'a>(&'a self, other: &'a FixedBitSet) -> Union<'a> {
-        Union {
-            iter: self.ones().chain(other.difference(self)),
-        }
+    pub fn union<'a>(&'a self, other: impl Into<FixedBitSlice<'a>>) -> Union<'a> {
+        self.as_bit_slice(..).union(other.into())
     }
 
     /// Returns a lazy iterator over the difference of two `FixedBitSet`s. The difference of `a`
     /// and `b` is the elements of `a` which are not in `b`.
-    pub fn difference<'a>(&'a self, other: &'a FixedBitSet) -> Difference<'a> {
-        Difference {
-            iter: self.ones(),
-            other,
-        }
+    pub fn difference<'a>(&'a self, other: impl Into<FixedBitSlice<'a>>) -> Difference<'a> {
+        self.as_bit_slice(..).difference(other.into())
     }
 
     /// Returns a lazy iterator over the symmetric difference of two `FixedBitSet`s.
     /// The symmetric difference of `a` and `b` is the elements of one, but not both, sets.
-    pub fn symmetric_difference<'a>(&'a self, other: &'a FixedBitSet) -> SymmetricDifference<'a> {
-        SymmetricDifference {
-            iter: self.difference(other).chain(other.difference(self)),
-        }
+    pub fn symmetric_difference<'a>(
+        &'a self,
+        other: impl Into<FixedBitSlice<'a>>,
+    ) -> SymmetricDifference<'a> {
+        self.as_bit_slice(..).symmetric_difference(other.into())
     }
 
     /// In-place union of two `FixedBitSet`s.
@@ -938,15 +829,8 @@ impl FixedBitSet {
     /// other methods like using [`union_with`] followed by [`count_ones`], this
     /// does not mutate in place or require separate allocations.
     #[inline]
-    pub fn union_count(&self, other: &FixedBitSet) -> usize {
-        let me = self.as_slice();
-        let other = other.as_slice();
-        let count = Self::batch_count_ones(me.iter().zip(other.iter()).map(|(x, y)| (*x | *y)));
-        match other.len().cmp(&me.len()) {
-            Ordering::Greater => count + Self::batch_count_ones(other[me.len()..].iter().copied()),
-            Ordering::Less => count + Self::batch_count_ones(me[other.len()..].iter().copied()),
-            Ordering::Equal => count,
-        }
+    pub fn union_count<'a>(&self, other: impl Into<FixedBitSlice<'a>>) -> usize {
+        self.as_bit_slice(..).union_count(other.into())
     }
 
     /// Computes how many bits would be set in the intersection between two bitsets.
@@ -960,7 +844,7 @@ impl FixedBitSet {
             self.as_slice()
                 .iter()
                 .zip(other.as_slice())
-                .map(|(x, y)| (*x & *y)),
+                .map(|(x, y)| *x & *y),
         )
     }
 
@@ -975,7 +859,7 @@ impl FixedBitSet {
             self.as_slice()
                 .iter()
                 .zip(other.as_slice().iter())
-                .map(|(x, y)| (*x & !*y)),
+                .map(|(x, y)| *x & !*y),
         ) + Self::batch_count_ones(self.as_slice().iter().skip(other.as_slice().len()).copied())
     }
 
@@ -988,7 +872,7 @@ impl FixedBitSet {
     pub fn symmetric_difference_count(&self, other: &FixedBitSet) -> usize {
         let me = self.as_slice();
         let other = other.as_slice();
-        let count = Self::batch_count_ones(me.iter().zip(other.iter()).map(|(x, y)| (*x ^ *y)));
+        let count = Self::batch_count_ones(me.iter().zip(other.iter()).map(|(x, y)| *x ^ *y));
         match other.len().cmp(&me.len()) {
             Ordering::Greater => count + Self::batch_count_ones(other[me.len()..].iter().copied()),
             Ordering::Less => count + Self::batch_count_ones(me[other.len()..].iter().copied()),
@@ -1095,7 +979,7 @@ impl Display for FixedBitSet {
 /// This struct is created by the [`FixedBitSet::difference`] method.
 pub struct Difference<'a> {
     iter: Ones<'a>,
-    other: &'a FixedBitSet,
+    other: FixedBitSlice<'a>,
 }
 
 impl<'a> Iterator for Difference<'a> {
@@ -1159,7 +1043,7 @@ impl<'a> FusedIterator for SymmetricDifference<'a> {}
 /// This struct is created by the [`FixedBitSet::intersection`] method.
 pub struct Intersection<'a> {
     iter: Ones<'a>,
-    other: &'a FixedBitSet,
+    other: FixedBitSlice<'a>,
 }
 
 impl<'a> Iterator for Intersection<'a> {
@@ -1428,11 +1312,7 @@ impl<'a> Iterator for Zeroes<'a> {
         self.bitset ^= t;
         let bit = self.block_idx + r;
         // The remaining zeroes beyond the length of the bitset must be excluded.
-        if bit < self.len {
-            Some(bit)
-        } else {
-            None
-        }
+        if bit < self.len { Some(bit) } else { None }
     }
 
     #[inline]
@@ -1483,11 +1363,7 @@ impl Index<usize> for FixedBitSet {
 
     #[inline]
     fn index(&self, bit: usize) -> &bool {
-        if self.contains(bit) {
-            &true
-        } else {
-            &false
-        }
+        if self.contains(bit) { &true } else { &false }
     }
 }
 

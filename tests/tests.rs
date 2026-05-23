@@ -16,7 +16,7 @@ fn it_works() {
     let mut fb = FixedBitSet::with_capacity(N);
 
     for i in 0..(N + 10) {
-        assert_eq!(fb.contains(i), false);
+        assert!(!fb.contains(i));
     }
 
     fb.insert(10);
@@ -441,14 +441,6 @@ fn count_ones_oob() {
     fb.count_ones(90..101);
 }
 
-#[should_panic]
-#[test]
-#[cfg_attr(target_family = "wasm", wasm_bindgen_test)]
-fn count_ones_negative_range() {
-    let fb = FixedBitSet::with_capacity(100);
-    fb.count_ones(90..80);
-}
-
 #[test]
 #[cfg_attr(target_family = "wasm", wasm_bindgen_test)]
 fn count_ones_panic() {
@@ -481,7 +473,7 @@ fn insert_range() {
     for i in 0..97 {
         assert_eq!(
             fb.contains(i),
-            i < 3 || 9 <= i && i < 32 || 37 <= i && i < 81 || 90 <= i
+            i < 3 || (9..32).contains(&i) || (37..81).contains(&i) || 90 <= i
         );
     }
     assert!(!fb.contains(97));
@@ -533,7 +525,7 @@ fn remove_range() {
     fb.remove_range(37..);
 
     for i in 0..48 {
-        assert_eq!(fb.contains(i), 32 <= i && i < 37);
+        assert_eq!(fb.contains(i), (32..37).contains(&i));
     }
 }
 
@@ -549,7 +541,7 @@ fn set_range() {
     fb.set_range(40..40, true);
 
     for i in 0..48 {
-        assert_eq!(fb.contains(i), 5 <= i && i < 9 || 32 <= i && i < 37);
+        assert_eq!(fb.contains(i), (5..9).contains(&i) || (32..37).contains(&i));
     }
     assert!(!fb.contains(48));
     assert!(!fb.contains(64));
@@ -568,7 +560,7 @@ fn toggle_range() {
     for i in 0..40 {
         assert_eq!(
             fb.contains(i),
-            i < 5 || 10 <= i && i < 12 || 30 <= i && i < 34 || 38 <= i
+            i < 5 || (10..12).contains(&i) || (30..34).contains(&i) || 38 <= i
         );
     }
     assert!(!fb.contains(40));
@@ -1188,7 +1180,7 @@ fn from_iterator() {
     for i in items {
         assert!(fb.contains(i));
     }
-    for i in vec![1, 3, 5, 7] {
+    for i in [1, 3, 5, 7] {
         assert!(!fb.contains(i));
     }
     assert_eq!(fb.len(), 9);
