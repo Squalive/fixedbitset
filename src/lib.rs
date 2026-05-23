@@ -1,10 +1,5 @@
 //! `FixedBitSet` is a simple fixed size set of bits.
 //!
-//! ### Crate features
-//!
-//! - `std` (default feature)
-//!   Disabling this feature disables using std and instead uses crate alloc.
-//!
 //! ### SIMD Acceleration
 //! `fixedbitset` is written with SIMD in mind. The backing store and set operations will use aligned SIMD data types and instructions when compiling
 //! for compatible target platforms. The use of SIMD generally enables better performance in many set and batch operations (i.e. intersection/union/inserting a range).
@@ -33,7 +28,7 @@ mod serde_impl;
 use alloc::{vec, vec::Vec};
 use core::{
     cmp::Ordering,
-    fmt::{Binary, Display, Error, Formatter, Write},
+    fmt::{Binary, Display, Error, Formatter},
     hash::Hash,
     iter::{Chain, FusedIterator},
     mem::{ManuallyDrop, MaybeUninit},
@@ -952,25 +947,13 @@ impl Drop for FixedBitSet {
 
 impl Binary for FixedBitSet {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
-        if f.alternate() {
-            f.write_str("0b")?;
-        }
-
-        for i in 0..self.length {
-            if self[i] {
-                f.write_char('1')?;
-            } else {
-                f.write_char('0')?;
-            }
-        }
-
-        Ok(())
+        Binary::fmt(&self.as_bit_slice(..), f)
     }
 }
 
 impl Display for FixedBitSet {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
-        Binary::fmt(&self, f)
+        Display::fmt(&self.as_bit_slice(..), f)
     }
 }
 

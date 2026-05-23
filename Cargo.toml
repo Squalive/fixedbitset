@@ -14,10 +14,6 @@ repository = "https://github.com/petgraph/fixedbitset"
 keywords = ["container", "data-structure", "bitvec", "bitset", "no_std"]
 categories = ["data-structures"]
 
-[features]
-std = []
-default = ["std"]
-
 [package.metadata.release]
 no-dev-version = true
 tag-name = "{{version}}"

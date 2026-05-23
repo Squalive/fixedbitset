@@ -1232,7 +1232,6 @@ fn zeroes() {
     );
 }
 
-#[cfg(feature = "std")]
 #[test]
 #[cfg_attr(target_family = "wasm", wasm_bindgen_test)]
 fn binary_trait() {
@@ -1243,7 +1242,6 @@ fn binary_trait() {
     assert_eq!(alloc::format!("{:#b}", fb), "0b0100010100100011");
 }
 
-#[cfg(feature = "std")]
 #[test]
 #[cfg_attr(target_family = "wasm", wasm_bindgen_test)]
 fn display_trait() {

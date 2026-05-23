@@ -2,7 +2,13 @@ use crate::{
     Block, Difference, FixedBitSet, IndexRange, Intersection, Masks, Ones, SimdBlock,
     SymmetricDifference, Union, Zeroes, div_rem,
 };
-use core::{cmp::Ordering, marker::PhantomData, mem::MaybeUninit, ptr::NonNull};
+use core::{
+    cmp::Ordering,
+    fmt::{Binary, Display, Error, Formatter, Write},
+    marker::PhantomData,
+    mem::MaybeUninit,
+    ptr::NonNull,
+};
 
 #[derive(Debug, Clone, Copy)]
 pub struct FixedBitSlice<'a> {
@@ -398,6 +404,30 @@ impl<'a> FixedBitSlice<'a> {
 impl<'a> From<&'a FixedBitSet> for FixedBitSlice<'a> {
     fn from(value: &'a FixedBitSet) -> Self {
         value.as_bit_slice(..)
+    }
+}
+
+impl<'a> Binary for FixedBitSlice<'a> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
+        if f.alternate() {
+            f.write_str("0b")?;
+        }
+
+        for i in 0..self.bits {
+            if self.contains(i) {
+                f.write_char('1')?;
+            } else {
+                f.write_char('0')?;
+            }
+        }
+
+        Ok(())
+    }
+}
+
+impl<'a> Display for FixedBitSlice<'a> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
+        Binary::fmt(&self, f)
     }
 }
 
