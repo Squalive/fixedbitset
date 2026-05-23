@@ -1,34 +1,33 @@
 use crate::{
-    Block, Difference, FixedBitSet, IndexRange, Intersection, Masks, Ones, SimdBlock,
-    SymmetricDifference, Union, Zeroes, div_rem,
+    Block, Difference, IndexRange, Intersection, Masks, Ones, SimdBlock, SymmetricDifference,
+    Union, Zeroes, div_rem,
 };
 use core::{
     cmp::Ordering,
     fmt::{Binary, Display, Error, Formatter, Write},
     marker::PhantomData,
-    mem::MaybeUninit,
     ptr::NonNull,
 };
 
 #[derive(Debug, Clone, Copy)]
-pub struct FixedBitSlice<'a> {
+pub struct FixedBitCell<'a> {
     data: NonNull<Block>,
     bits: usize,
-    marker: PhantomData<&'a [Block]>,
+    marker: PhantomData<&'a mut [Block]>,
 }
 
 // SAFETY: FixedBitSlice does not contains thread-local state
-unsafe impl<'a> Send for FixedBitSlice<'a> {}
+unsafe impl<'a> Send for FixedBitCell<'a> {}
 
 // SAFETY: No mutable access is allowed in this
-unsafe impl<'a> Sync for FixedBitSlice<'a> {}
+unsafe impl<'a> Sync for FixedBitCell<'a> {}
 
-impl<'a> FixedBitSlice<'a> {
+impl<'a> FixedBitCell<'a> {
     /// # Safety
     /// - data must be a valid ptr.
     /// - blocks must be a valid range in data
-    pub unsafe fn from_raw_parts(data: *const Block, bits: usize) -> FixedBitSlice<'a> {
-        FixedBitSlice {
+    pub unsafe fn from_raw_parts(data: *const Block, bits: usize) -> FixedBitCell<'a> {
+        FixedBitCell {
             data: NonNull::new_unchecked(data.cast_mut()),
             bits,
             marker: PhantomData,
@@ -284,7 +283,7 @@ impl<'a> FixedBitSlice<'a> {
     /// other methods like using [`union_with`] followed by [`count_ones`], this
     /// does not mutate in place or require separate allocations.
     #[inline]
-    pub fn union_count(self, other: FixedBitSlice) -> usize {
+    pub fn union_count(self, other: FixedBitCell) -> usize {
         let me = self.as_slice();
         let other = other.as_slice();
         let count = Self::batch_count_ones(me.iter().zip(other.iter()).map(|(x, y)| *x | *y));
@@ -301,7 +300,7 @@ impl<'a> FixedBitSlice<'a> {
     /// other methods like using [`intersect_with`] followed by [`count_ones`], this
     /// does not mutate in place or require separate allocations.
     #[inline]
-    pub fn intersection_count(&self, other: FixedBitSlice) -> usize {
+    pub fn intersection_count(&self, other: FixedBitCell) -> usize {
         Self::batch_count_ones(
             self.as_slice()
                 .iter()
@@ -316,7 +315,7 @@ impl<'a> FixedBitSlice<'a> {
     /// other methods like using [`difference_with`] followed by [`count_ones`], this
     /// does not mutate in place or require separate allocations.
     #[inline]
-    pub fn difference_count(&self, other: &FixedBitSet) -> usize {
+    pub fn difference_count(&self, other: FixedBitCell) -> usize {
         Self::batch_count_ones(
             self.as_slice()
                 .iter()
@@ -331,7 +330,7 @@ impl<'a> FixedBitSlice<'a> {
     /// other methods like using [`symmetric_difference_with`] followed by [`count_ones`], this
     /// does not mutate in place or require separate allocations.
     #[inline]
-    pub fn symmetric_difference_count(&self, other: &FixedBitSet) -> usize {
+    pub fn symmetric_difference_count(&self, other: FixedBitCell) -> usize {
         let me = self.as_slice();
         let other = other.as_slice();
         let count = Self::batch_count_ones(me.iter().zip(other.iter()).map(|(x, y)| *x ^ *y));
@@ -343,7 +342,7 @@ impl<'a> FixedBitSlice<'a> {
     }
 
     /// Returns a lazy iterator over the intersection of two `FixedBitSet`s
-    pub fn intersection(self, other: FixedBitSlice<'a>) -> Intersection<'a> {
+    pub fn intersection(self, other: FixedBitCell<'a>) -> Intersection<'a> {
         Intersection {
             iter: self.ones(),
             other,
@@ -351,7 +350,7 @@ impl<'a> FixedBitSlice<'a> {
     }
 
     /// Returns a lazy iterator over the union of two `FixedBitSet`s.
-    pub fn union(self, other: FixedBitSlice<'a>) -> Union<'a> {
+    pub fn union(self, other: FixedBitCell<'a>) -> Union<'a> {
         Union {
             iter: self.ones().chain(other.difference(self)),
         }
@@ -359,7 +358,7 @@ impl<'a> FixedBitSlice<'a> {
 
     /// Returns a lazy iterator over the difference of two `FixedBitSet`s. The difference of `a`
     /// and `b` is the elements of `a` which are not in `b`.
-    pub fn difference(self, other: FixedBitSlice<'a>) -> Difference<'a> {
+    pub fn difference(self, other: FixedBitCell<'a>) -> Difference<'a> {
         Difference {
             iter: self.ones(),
             other,
@@ -368,7 +367,7 @@ impl<'a> FixedBitSlice<'a> {
 
     /// Returns a lazy iterator over the symmetric difference of two `FixedBitSet`s.
     /// The symmetric difference of `a` and `b` is the elements of one, but not both, sets.
-    pub fn symmetric_difference(self, other: FixedBitSlice<'a>) -> SymmetricDifference<'a> {
+    pub fn symmetric_difference(self, other: FixedBitCell<'a>) -> SymmetricDifference<'a> {
         SymmetricDifference {
             iter: self.difference(other).chain(other.difference(self)),
         }
@@ -376,7 +375,7 @@ impl<'a> FixedBitSlice<'a> {
 
     /// Returns `true` if `self` has no elements in common with `other`. This
     /// is equivalent to checking for an empty intersection.
-    pub fn is_disjoint(self, other: FixedBitSlice) -> bool {
+    pub fn is_disjoint(self, other: FixedBitCell) -> bool {
         self.as_simd_slice()
             .iter()
             .zip(other.as_simd_slice())
@@ -385,7 +384,7 @@ impl<'a> FixedBitSlice<'a> {
 
     /// Returns `true` if the set is a subset of another, i.e. `other` contains
     /// at least all the values in `self`.
-    pub fn is_subset(self, other: FixedBitSlice) -> bool {
+    pub fn is_subset(self, other: FixedBitCell) -> bool {
         let me = self.as_simd_slice();
         let other = other.as_simd_slice();
         me.iter()
@@ -396,84 +395,23 @@ impl<'a> FixedBitSlice<'a> {
 
     /// Returns `true` if the set is a superset of another, i.e. `self` contains
     /// at least all the values in `other`.
-    pub fn is_superset(self, other: FixedBitSlice) -> bool {
+    pub fn is_superset(self, other: FixedBitCell) -> bool {
         other.is_subset(self)
-    }
-}
-
-impl<'a> From<&'a FixedBitSet> for FixedBitSlice<'a> {
-    fn from(value: &'a FixedBitSet) -> Self {
-        value.as_bit_slice(..)
-    }
-}
-
-impl<'a> Binary for FixedBitSlice<'a> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
-        if f.alternate() {
-            f.write_str("0b")?;
-        }
-
-        for i in 0..self.bits {
-            if self.contains(i) {
-                f.write_char('1')?;
-            } else {
-                f.write_char('0')?;
-            }
-        }
-
-        Ok(())
-    }
-}
-
-impl<'a> Display for FixedBitSlice<'a> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
-        Binary::fmt(&self, f)
-    }
-}
-
-#[derive(Debug)]
-pub struct FixedBitSliceMut<'a> {
-    data: NonNull<MaybeUninit<Block>>,
-    bits: usize,
-    marker: PhantomData<&'a mut [Block]>,
-}
-
-// SAFETY: FixedBitSliceMut does not contains thread-local state
-unsafe impl<'a> Send for FixedBitSliceMut<'a> {}
-
-// SAFETY: No cross thread mutable access is allowed
-unsafe impl<'a> Sync for FixedBitSliceMut<'a> {}
-
-impl<'a> FixedBitSliceMut<'a> {
-    /// # Safety
-    /// - data must be a valid ptr.
-    /// - blocks must be a valid range in data
-    pub unsafe fn from_raw_parts(data: *mut Block, bits: usize) -> FixedBitSliceMut<'a> {
-        FixedBitSliceMut {
-            data: NonNull::new_unchecked(data.cast()),
-            bits,
-            marker: PhantomData,
-        }
     }
 
     /// # Safety
     /// Caller must ensures subblock is inside the range of blocks.len()
     #[inline]
-    unsafe fn get_unchecked_mut(&mut self, subblock: usize) -> &mut Block {
+    unsafe fn get_unchecked_mut(self, subblock: usize) -> &'a mut Block {
         // SAFETY: caller ensures the safety of this
         unsafe { &mut *self.data.as_ptr().cast::<Block>().add(subblock) }
-    }
-
-    pub fn as_readonly(&self) -> FixedBitSlice<'_> {
-        // SAFETY: This data is always valid
-        unsafe { FixedBitSlice::from_raw_parts(self.data.as_ptr().cast(), self.bits) }
     }
 
     /// Sets a bit to the provided `enabled` value.
     ///
     /// **Panics** if **bit** is out of bounds.
     #[inline]
-    pub fn set(&mut self, bit: usize, enabled: bool) {
+    pub fn set(self, bit: usize, enabled: bool) {
         assert!(
             bit < self.bits,
             "set at index {} exceeds fixedbitset size {}",
@@ -491,7 +429,7 @@ impl<'a> FixedBitSliceMut<'a> {
     /// # Safety
     /// `bit` must be less than `self.len()`
     #[inline]
-    pub unsafe fn set_unchecked(&mut self, bit: usize, enabled: bool) {
+    pub unsafe fn set_unchecked(self, bit: usize, enabled: bool) {
         let (block, i) = div_rem(bit, Block::BITS as usize);
         // SAFETY: The above assertion ensures that the block is inside the Vec's allocation.
         let elt = unsafe { self.get_unchecked_mut(block) };
@@ -506,7 +444,7 @@ impl<'a> FixedBitSliceMut<'a> {
     ///
     /// **Panics** if **bit** is out of bounds.
     #[inline]
-    pub fn insert(&mut self, bit: usize) {
+    pub fn insert(self, bit: usize) {
         assert!(
             bit < self.bits,
             "insert at index {} exceeds fixedbitset size {}",
@@ -524,7 +462,7 @@ impl<'a> FixedBitSliceMut<'a> {
     /// # Safety
     /// `bit` must be less than `self.len()`
     #[inline]
-    pub unsafe fn insert_unchecked(&mut self, bit: usize) {
+    pub unsafe fn insert_unchecked(self, bit: usize) {
         let (block, i) = div_rem(bit, Block::BITS as usize);
         // SAFETY: The above assertion ensures that the block is inside the Vec's allocation.
         unsafe {
@@ -536,7 +474,7 @@ impl<'a> FixedBitSliceMut<'a> {
     ///
     /// **Panics** if **bit** is out of bounds.
     #[inline]
-    pub fn remove(&mut self, bit: usize) {
+    pub fn remove(self, bit: usize) {
         assert!(
             bit < self.bits,
             "remove at index {} exceeds fixedbitset size {}",
@@ -554,7 +492,7 @@ impl<'a> FixedBitSliceMut<'a> {
     /// # Safety
     /// `bit` must be less than `self.len()`
     #[inline]
-    pub unsafe fn remove_unchecked(&mut self, bit: usize) {
+    pub unsafe fn remove_unchecked(self, bit: usize) {
         let (block, i) = div_rem(bit, Block::BITS as usize);
         // SAFETY: The above assertion ensures that the block is inside the Vec's allocation.
         unsafe {
@@ -566,7 +504,7 @@ impl<'a> FixedBitSliceMut<'a> {
     ///
     /// **Panics** if **bit** is out of bounds.
     #[inline]
-    pub fn put(&mut self, bit: usize) -> bool {
+    pub fn put(self, bit: usize) -> bool {
         assert!(
             bit < self.bits,
             "put at index {} exceeds fixedbitset size {}",
@@ -582,7 +520,7 @@ impl<'a> FixedBitSliceMut<'a> {
     /// # Safety
     /// `bit` must be less than `self.len()`
     #[inline]
-    pub unsafe fn put_unchecked(&mut self, bit: usize) -> bool {
+    pub unsafe fn put_unchecked(self, bit: usize) -> bool {
         let (block, i) = div_rem(bit, Block::BITS as usize);
         // SAFETY: The above assertion ensures that the block is inside the Vec's allocation.
         unsafe {
@@ -597,7 +535,7 @@ impl<'a> FixedBitSliceMut<'a> {
     ///
     /// ***Panics*** if **bit** is out of bounds
     #[inline]
-    pub fn toggle(&mut self, bit: usize) {
+    pub fn toggle(self, bit: usize) {
         assert!(
             bit < self.bits,
             "toggle at index {} exceeds fixedbitset size {}",
@@ -615,7 +553,7 @@ impl<'a> FixedBitSliceMut<'a> {
     /// # Safety
     /// `bit` must be less than `self.len()`
     #[inline]
-    pub unsafe fn toggle_unchecked(&mut self, bit: usize) {
+    pub unsafe fn toggle_unchecked(self, bit: usize) {
         let (block, i) = div_rem(bit, Block::BITS as usize);
         // SAFETY: The above assertion ensures that the block is inside the Vec's allocation.
         unsafe {
@@ -629,14 +567,14 @@ impl<'a> FixedBitSliceMut<'a> {
     ///
     /// **Panics** if **to** is out of bounds.
     #[inline]
-    pub fn copy_bit(&mut self, from: usize, to: usize) {
+    pub fn copy_bit(self, from: usize, to: usize) {
         assert!(
             to < self.bits,
             "copy to index {} exceeds fixedbitset size {}",
             to,
             self.bits
         );
-        let enabled = self.as_readonly().contains(from);
+        let enabled = self.contains(from);
         // SAFETY: The above assertion ensures that the block is inside the Vec's allocation.
         unsafe { self.set_unchecked(to, enabled) };
     }
@@ -649,10 +587,384 @@ impl<'a> FixedBitSliceMut<'a> {
     /// # Safety
     /// `to` must both be less than `self.len()`
     #[inline]
-    pub unsafe fn copy_bit_unchecked(&mut self, from: usize, to: usize) {
+    pub unsafe fn copy_bit_unchecked(self, from: usize, to: usize) {
         // SAFETY: Caller must ensure that `from` is within bounds.
-        let enabled = unsafe { self.as_readonly().contains_unchecked(from) };
+        let enabled = unsafe { self.contains_unchecked(from) };
         // SAFETY: Caller must ensure that `to` is within bounds.
         unsafe { self.set_unchecked(to, enabled) };
+    }
+}
+
+impl<'a> Binary for FixedBitCell<'a> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
+        if f.alternate() {
+            f.write_str("0b")?;
+        }
+
+        for i in 0..self.bits {
+            if self.contains(i) {
+                f.write_char('1')?;
+            } else {
+                f.write_char('0')?;
+            }
+        }
+
+        Ok(())
+    }
+}
+
+impl<'a> Display for FixedBitCell<'a> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
+        Binary::fmt(&self, f)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct FixedBitSlice<'a>(FixedBitCell<'a>);
+
+// SAFETY: FixedBitSlice does not contains thread-local state
+unsafe impl<'a> Send for FixedBitSlice<'a> {}
+
+// SAFETY: No mutable access is allowed in this
+unsafe impl<'a> Sync for FixedBitSlice<'a> {}
+
+impl<'a> FixedBitSlice<'a> {
+    /// # Safety
+    /// - data must be a valid ptr.
+    /// - blocks must be a valid range in data
+    pub unsafe fn from_raw_parts(data: *const Block, bits: usize) -> FixedBitSlice<'a> {
+        FixedBitSlice(FixedBitCell::from_raw_parts(data, bits))
+    }
+
+    /// View the bitset as a slice of `Block` blocks
+    #[inline]
+    pub fn as_slice(&self) -> &'a [Block] {
+        self.0.as_slice()
+    }
+
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    #[inline]
+    pub fn is_clear(&self) -> bool {
+        self.0.is_clear()
+    }
+
+    /// Finds the lowest set bit in the bitset.
+    ///
+    /// Returns `None` if there aren't any set bits.
+    #[inline]
+    pub fn minimum(&self) -> Option<usize> {
+        self.0.minimum()
+    }
+
+    /// Finds the highest set bit in the bitset.
+    ///
+    /// Returns `None` if there aren't any set bits.
+    #[inline]
+    pub fn maximum(&self) -> Option<usize> {
+        self.0.maximum()
+    }
+
+    /// `true` if all bits in the [`FixedBitSet`] are set.
+    ///
+    /// This is equivalent to [`bitset.count_ones(..) == bitset.len()`](FixedBitSet::count_ones).
+    #[inline]
+    pub fn is_full(&self) -> bool {
+        self.0.is_full()
+    }
+
+    /// Return **true** if the bit is enabled in the **FixedBitSet**,
+    /// **false** otherwise.
+    ///
+    /// Note: bits outside the capacity are always disabled.
+    ///
+    /// Note: Also available with index syntax: `bitset[bit]`.
+    #[inline]
+    pub fn contains(&self, bit: usize) -> bool {
+        self.0.contains(bit)
+    }
+
+    /// Return **true** if the bit is enabled in the **FixedBitSet**,
+    /// **false** otherwise.
+    ///
+    /// Note: unlike `contains`, calling this with an invalid `bit`
+    /// is undefined behavior.
+    ///
+    /// # Safety
+    /// `bit` must be less than `self.len()`
+    #[inline]
+    pub unsafe fn contains_unchecked(&self, bit: usize) -> bool {
+        self.0.contains_unchecked(bit)
+    }
+
+    /// Checks if the bitset contains every bit in the given range.
+    ///
+    /// **Panics** if the range extends past the end of the bitset.
+    #[inline]
+    pub fn contains_all_in_range<T: IndexRange>(&self, range: T) -> bool {
+        self.0.contains_all_in_range(range)
+    }
+
+    /// Checks if the bitset contains at least one set bit in the given range.
+    ///
+    /// **Panics** if the range extends past the end of the bitset.
+    #[inline]
+    pub fn contains_any_in_range<T: IndexRange>(&self, range: T) -> bool {
+        self.0.contains_any_in_range(range)
+    }
+
+    /// Count the number of set bits in the given bit range.
+    ///
+    /// This function is potentially much faster than using `ones(other).count()`.
+    /// Use `..` to count the whole content of the bitset.
+    ///
+    /// **Panics** if the range extends past the end of the bitset.
+    #[inline]
+    pub fn count_ones<T: IndexRange>(&self, range: T) -> usize {
+        self.0.count_ones(range)
+    }
+
+    /// Count the number of unset bits in the given bit range.
+    ///
+    /// This function is potentially much faster than using `zeroes(other).count()`.
+    /// Use `..` to count the whole content of the bitset.
+    ///
+    /// **Panics** if the range extends past the end of the bitset.
+    #[inline]
+    pub fn count_zeroes<T: IndexRange>(&self, range: T) -> usize {
+        self.0.count_zeroes(range)
+    }
+
+    /// Iterates over all enabled bits.
+    ///
+    /// Iterator element is the index of the `1` bit, type `usize`.
+    #[inline]
+    pub fn ones(&self) -> Ones<'_> {
+        self.0.ones()
+    }
+
+    /// Iterates over all disabled bits.
+    ///
+    /// Iterator element is the index of the `0` bit, type `usize`.
+    #[inline]
+    pub fn zeroes(&self) -> Zeroes<'_> {
+        self.0.zeroes()
+    }
+
+    /// Computes how many bits would be set in the union between two bitsets.
+    ///
+    /// This is potentially much faster than using `union(other).count()`. Unlike
+    /// other methods like using [`union_with`] followed by [`count_ones`], this
+    /// does not mutate in place or require separate allocations.
+    #[inline]
+    pub fn union_count(&self, other: &FixedBitSlice) -> usize {
+        self.0.union_count(other.0)
+    }
+
+    /// Computes how many bits would be set in the intersection between two bitsets.
+    ///
+    /// This is potentially much faster than using `intersection(other).count()`. Unlike
+    /// other methods like using [`intersect_with`] followed by [`count_ones`], this
+    /// does not mutate in place or require separate allocations.
+    #[inline]
+    pub fn intersection_count(&self, other: &FixedBitSlice) -> usize {
+        self.0.intersection_count(other.0)
+    }
+
+    /// Computes how many bits would be set in the difference between two bitsets.
+    ///
+    /// This is potentially much faster than using `difference(other).count()`. Unlike
+    /// other methods like using [`difference_with`] followed by [`count_ones`], this
+    /// does not mutate in place or require separate allocations.
+    #[inline]
+    pub fn difference_count(&self, other: &FixedBitSlice) -> usize {
+        self.0.difference_count(other.0)
+    }
+
+    /// Computes how many bits would be set in the symmetric difference between two bitsets.
+    ///
+    /// This is potentially much faster than using `symmetric_difference(other).count()`. Unlike
+    /// other methods like using [`symmetric_difference_with`] followed by [`count_ones`], this
+    /// does not mutate in place or require separate allocations.
+    #[inline]
+    pub fn symmetric_difference_count(&self, other: &FixedBitSlice) -> usize {
+        self.0.symmetric_difference_count(other.0)
+    }
+
+    /// Returns a lazy iterator over the intersection of two `FixedBitSet`s
+    pub fn intersection(&'a self, other: &'a FixedBitSlice<'a>) -> Intersection<'a> {
+        self.0.intersection(other.0)
+    }
+
+    /// Returns a lazy iterator over the union of two `FixedBitSet`s.
+    pub fn union(&'a self, other: &'a FixedBitSlice<'a>) -> Union<'a> {
+        self.0.union(other.0)
+    }
+
+    /// Returns a lazy iterator over the difference of two `FixedBitSet`s. The difference of `a`
+    /// and `b` is the elements of `a` which are not in `b`.
+    pub fn difference(&'a self, other: &'a FixedBitSlice<'a>) -> Difference<'a> {
+        self.0.difference(other.0)
+    }
+
+    /// Returns a lazy iterator over the symmetric difference of two `FixedBitSet`s.
+    /// The symmetric difference of `a` and `b` is the elements of one, but not both, sets.
+    pub fn symmetric_difference(&'a self, other: &'a FixedBitSlice<'a>) -> SymmetricDifference<'a> {
+        self.0.symmetric_difference(other.0)
+    }
+
+    /// Returns `true` if `self` has no elements in common with `other`. This
+    /// is equivalent to checking for an empty intersection.
+    pub fn is_disjoint(&self, other: &FixedBitSlice) -> bool {
+        self.0.is_disjoint(other.0)
+    }
+
+    /// Returns `true` if the set is a subset of another, i.e. `other` contains
+    /// at least all the values in `self`.
+    pub fn is_subset(&self, other: &FixedBitSlice) -> bool {
+        self.0.is_subset(other.0)
+    }
+
+    /// Returns `true` if the set is a superset of another, i.e. `self` contains
+    /// at least all the values in `other`.
+    pub fn is_superset(&self, other: &FixedBitSlice) -> bool {
+        other.is_subset(self)
+    }
+}
+
+#[derive(Debug)]
+pub struct FixedBitSliceMut<'a>(FixedBitCell<'a>);
+
+// SAFETY: FixedBitSliceMut does not contains thread-local state
+unsafe impl<'a> Send for FixedBitSliceMut<'a> {}
+
+// SAFETY: No cross thread mutable access is allowed
+unsafe impl<'a> Sync for FixedBitSliceMut<'a> {}
+
+impl<'a> FixedBitSliceMut<'a> {
+    /// # Safety
+    /// - data must be a valid ptr.
+    /// - blocks must be a valid range in data
+    pub unsafe fn from_raw_parts(data: *mut Block, bits: usize) -> FixedBitSliceMut<'a> {
+        FixedBitSliceMut(FixedBitCell::from_raw_parts(data, bits))
+    }
+
+    pub fn as_readonly(&self) -> FixedBitSlice<'_> {
+        FixedBitSlice(self.0)
+    }
+
+    /// Sets a bit to the provided `enabled` value.
+    ///
+    /// **Panics** if **bit** is out of bounds.
+    #[inline]
+    pub fn set(&mut self, bit: usize, enabled: bool) {
+        self.0.set(bit, enabled);
+    }
+
+    /// Sets a bit to the provided `enabled` value without doing any bounds checking.
+    ///
+    /// # Safety
+    /// `bit` must be less than `self.len()`
+    #[inline]
+    pub unsafe fn set_unchecked(&mut self, bit: usize, enabled: bool) {
+        self.0.set_unchecked(bit, enabled);
+    }
+
+    /// Enable `bit`.
+    ///
+    /// **Panics** if **bit** is out of bounds.
+    #[inline]
+    pub fn insert(&mut self, bit: usize) {
+        self.0.insert(bit);
+    }
+
+    /// Enable `bit` without any length checks.
+    ///
+    /// # Safety
+    /// `bit` must be less than `self.len()`
+    #[inline]
+    pub unsafe fn insert_unchecked(&mut self, bit: usize) {
+        self.0.insert_unchecked(bit);
+    }
+
+    /// Disable `bit`.
+    ///
+    /// **Panics** if **bit** is out of bounds.
+    #[inline]
+    pub fn remove(&mut self, bit: usize) {
+        self.0.remove(bit);
+    }
+
+    /// Disable `bit` without any bounds checking.
+    ///
+    /// # Safety
+    /// `bit` must be less than `self.len()`
+    #[inline]
+    pub unsafe fn remove_unchecked(&mut self, bit: usize) {
+        self.0.remove_unchecked(bit);
+    }
+
+    /// Enable `bit`, and return its previous value.
+    ///
+    /// **Panics** if **bit** is out of bounds.
+    #[inline]
+    pub fn put(&mut self, bit: usize) -> bool {
+        self.0.put(bit)
+    }
+
+    /// Enable `bit`, and return its previous value without doing any bounds checking.
+    ///
+    /// # Safety
+    /// `bit` must be less than `self.len()`
+    #[inline]
+    pub unsafe fn put_unchecked(&mut self, bit: usize) -> bool {
+        self.0.put_unchecked(bit)
+    }
+
+    /// Toggle `bit` (inverting its state).
+    ///
+    /// ***Panics*** if **bit** is out of bounds
+    #[inline]
+    pub fn toggle(&mut self, bit: usize) {
+        self.0.toggle(bit)
+    }
+
+    /// Toggle `bit` (inverting its state) without any bounds checking.
+    ///
+    /// # Safety
+    /// `bit` must be less than `self.len()`
+    #[inline]
+    pub unsafe fn toggle_unchecked(&mut self, bit: usize) {
+        self.0.toggle_unchecked(bit)
+    }
+
+    /// Copies boolean value from specified bit to the specified bit.
+    ///
+    /// If `from` is out-of-bounds, `to` will be unset.
+    ///
+    /// **Panics** if **to** is out of bounds.
+    #[inline]
+    pub fn copy_bit(&mut self, from: usize, to: usize) {
+        self.0.copy_bit(from, to)
+    }
+
+    /// Copies boolean value from specified bit to the specified bit.
+    ///
+    /// Note: unlike `copy_bit`, calling this with an invalid `from`
+    /// is undefined behavior.
+    ///
+    /// # Safety
+    /// `to` must both be less than `self.len()`
+    #[inline]
+    pub unsafe fn copy_bit_unchecked(&mut self, from: usize, to: usize) {
+        self.0.copy_bit_unchecked(from, to)
     }
 }

@@ -189,11 +189,6 @@ impl FixedBitSet {
     }
 
     #[inline]
-    fn batch_count_ones(blocks: impl IntoIterator<Item = Block>) -> usize {
-        blocks.into_iter().map(|x| x.count_ones() as usize).sum()
-    }
-
-    #[inline]
     fn as_simd_slice(&self) -> &[SimdBlock] {
         // SAFETY: The slice constructed is within bounds of the underlying allocation. This function
         // is called with a read-only borrow so no other write can happen as long as the returned borrow lives.
@@ -219,6 +214,15 @@ impl FixedBitSet {
         // SAFETY: The slice constructed is within bounds of the underlying allocation. This function
         // is called with a mutable borrow so no other read or write can happen as long as the returned borrow lives.
         unsafe { core::slice::from_raw_parts_mut(self.data.as_ptr(), self.simd_block_len()) }
+    }
+
+    /// range is in block size
+    #[inline]
+    pub fn as_bit_cell(&self, range: impl RangeBounds<usize>) -> FixedBitCell<'_> {
+        let (start, bits) = self.bit_slice_range(range);
+
+        // SAFETY: self.data is valid, usize_len is the valid data range
+        unsafe { FixedBitCell::from_raw_parts(self.data.add(start).as_ptr().cast(), bits) }
     }
 
     /// range is in block size
@@ -732,28 +736,26 @@ impl FixedBitSet {
     }
 
     /// Returns a lazy iterator over the intersection of two `FixedBitSet`s
-    pub fn intersection<'a>(&'a self, other: impl Into<FixedBitSlice<'a>>) -> Intersection<'a> {
-        self.as_bit_slice(..).intersection(other.into())
+    pub fn intersection<'a>(&'a self, other: &'a FixedBitSet) -> Intersection<'a> {
+        self.as_bit_cell(..).intersection(other.as_bit_cell(..))
     }
 
     /// Returns a lazy iterator over the union of two `FixedBitSet`s.
-    pub fn union<'a>(&'a self, other: impl Into<FixedBitSlice<'a>>) -> Union<'a> {
-        self.as_bit_slice(..).union(other.into())
+    pub fn union<'a>(&'a self, other: &'a FixedBitSet) -> Union<'a> {
+        self.as_bit_cell(..).union(other.as_bit_cell(..))
     }
 
     /// Returns a lazy iterator over the difference of two `FixedBitSet`s. The difference of `a`
     /// and `b` is the elements of `a` which are not in `b`.
-    pub fn difference<'a>(&'a self, other: impl Into<FixedBitSlice<'a>>) -> Difference<'a> {
-        self.as_bit_slice(..).difference(other.into())
+    pub fn difference<'a>(&'a self, other: &'a FixedBitSet) -> Difference<'a> {
+        self.as_bit_cell(..).difference(other.as_bit_cell(..))
     }
 
     /// Returns a lazy iterator over the symmetric difference of two `FixedBitSet`s.
     /// The symmetric difference of `a` and `b` is the elements of one, but not both, sets.
-    pub fn symmetric_difference<'a>(
-        &'a self,
-        other: impl Into<FixedBitSlice<'a>>,
-    ) -> SymmetricDifference<'a> {
-        self.as_bit_slice(..).symmetric_difference(other.into())
+    pub fn symmetric_difference<'a>(&'a self, other: &'a FixedBitSet) -> SymmetricDifference<'a> {
+        self.as_bit_cell(..)
+            .symmetric_difference(other.as_bit_cell(..))
     }
 
     /// In-place union of two `FixedBitSet`s.
@@ -824,8 +826,8 @@ impl FixedBitSet {
     /// other methods like using [`union_with`] followed by [`count_ones`], this
     /// does not mutate in place or require separate allocations.
     #[inline]
-    pub fn union_count<'a>(&self, other: impl Into<FixedBitSlice<'a>>) -> usize {
-        self.as_bit_slice(..).union_count(other.into())
+    pub fn union_count(&self, other: &FixedBitSet) -> usize {
+        self.as_bit_cell(..).union_count(other.as_bit_cell(..))
     }
 
     /// Computes how many bits would be set in the intersection between two bitsets.
@@ -835,12 +837,8 @@ impl FixedBitSet {
     /// does not mutate in place or require separate allocations.
     #[inline]
     pub fn intersection_count(&self, other: &FixedBitSet) -> usize {
-        Self::batch_count_ones(
-            self.as_slice()
-                .iter()
-                .zip(other.as_slice())
-                .map(|(x, y)| *x & *y),
-        )
+        self.as_bit_cell(..)
+            .intersection_count(other.as_bit_cell(..))
     }
 
     /// Computes how many bits would be set in the difference between two bitsets.
@@ -850,12 +848,7 @@ impl FixedBitSet {
     /// does not mutate in place or require separate allocations.
     #[inline]
     pub fn difference_count(&self, other: &FixedBitSet) -> usize {
-        Self::batch_count_ones(
-            self.as_slice()
-                .iter()
-                .zip(other.as_slice().iter())
-                .map(|(x, y)| *x & !*y),
-        ) + Self::batch_count_ones(self.as_slice().iter().skip(other.as_slice().len()).copied())
+        self.as_bit_cell(..).difference_count(other.as_bit_cell(..))
     }
 
     /// Computes how many bits would be set in the symmetric difference between two bitsets.
@@ -865,34 +858,20 @@ impl FixedBitSet {
     /// does not mutate in place or require separate allocations.
     #[inline]
     pub fn symmetric_difference_count(&self, other: &FixedBitSet) -> usize {
-        let me = self.as_slice();
-        let other = other.as_slice();
-        let count = Self::batch_count_ones(me.iter().zip(other.iter()).map(|(x, y)| *x ^ *y));
-        match other.len().cmp(&me.len()) {
-            Ordering::Greater => count + Self::batch_count_ones(other[me.len()..].iter().copied()),
-            Ordering::Less => count + Self::batch_count_ones(me[other.len()..].iter().copied()),
-            Ordering::Equal => count,
-        }
+        self.as_bit_cell(..)
+            .symmetric_difference_count(other.as_bit_cell(..))
     }
 
     /// Returns `true` if `self` has no elements in common with `other`. This
     /// is equivalent to checking for an empty intersection.
     pub fn is_disjoint(&self, other: &FixedBitSet) -> bool {
-        self.as_simd_slice()
-            .iter()
-            .zip(other.as_simd_slice())
-            .all(|(x, y)| (*x & *y).is_empty())
+        self.as_bit_cell(..).is_disjoint(other.as_bit_cell(..))
     }
 
     /// Returns `true` if the set is a subset of another, i.e. `other` contains
     /// at least all the values in `self`.
     pub fn is_subset(&self, other: &FixedBitSet) -> bool {
-        let me = self.as_simd_slice();
-        let other = other.as_simd_slice();
-        me.iter()
-            .zip(other.iter())
-            .all(|(x, y)| x.andnot(*y).is_empty())
-            && me.iter().skip(other.len()).all(|x| x.is_empty())
+        self.as_bit_cell(..).is_subset(other.as_bit_cell(..))
     }
 
     /// Returns `true` if the set is a superset of another, i.e. `self` contains
@@ -947,13 +926,13 @@ impl Drop for FixedBitSet {
 
 impl Binary for FixedBitSet {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
-        Binary::fmt(&self.as_bit_slice(..), f)
+        Binary::fmt(&self.as_bit_cell(..), f)
     }
 }
 
 impl Display for FixedBitSet {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
-        Display::fmt(&self.as_bit_slice(..), f)
+        Display::fmt(&self.as_bit_cell(..), f)
     }
 }
 
@@ -962,7 +941,7 @@ impl Display for FixedBitSet {
 /// This struct is created by the [`FixedBitSet::difference`] method.
 pub struct Difference<'a> {
     iter: Ones<'a>,
-    other: FixedBitSlice<'a>,
+    other: FixedBitCell<'a>,
 }
 
 impl<'a> Iterator for Difference<'a> {
@@ -1026,7 +1005,7 @@ impl<'a> FusedIterator for SymmetricDifference<'a> {}
 /// This struct is created by the [`FixedBitSet::intersection`] method.
 pub struct Intersection<'a> {
     iter: Ones<'a>,
-    other: FixedBitSlice<'a>,
+    other: FixedBitCell<'a>,
 }
 
 impl<'a> Iterator for Intersection<'a> {
