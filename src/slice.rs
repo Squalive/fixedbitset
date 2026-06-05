@@ -869,6 +869,10 @@ impl<'a> FixedBitSliceMut<'a> {
         FixedBitSliceMut(FixedBitCell::from_raw_parts(data, bits))
     }
 
+    pub fn reborrow(&mut self) -> FixedBitSliceMut<'_> {
+        FixedBitSliceMut(self.0)
+    }
+
     pub fn as_readonly(&self) -> FixedBitSlice<'_> {
         FixedBitSlice(self.0)
     }
