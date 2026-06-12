@@ -1,7 +1,7 @@
 #[cfg(not(feature = "std"))]
 use core as std;
 
-use crate::{Block, FixedBitSet, BYTES};
+use crate::{BYTES, Block, FixedBitSet};
 use alloc::vec::Vec;
 use core::{convert::TryFrom, fmt};
 use serde::de::{self, Deserialize, Deserializer, MapAccess, SeqAccess, Visitor};
