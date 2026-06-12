@@ -2,9 +2,9 @@ name: Continuous integration
 
 on:
   push:
-    branches: [ master ]
+    branches: [master]
   pull_request:
-    branches: [ master ]
+    branches: [master]
 
 env:
   CARGO_TERM_COLOR: always
@@ -21,43 +21,43 @@ jobs:
     env:
       RUSTFLAGS: "-C target-feature=${{matrix.features}} -D warnings"
     steps:
-    - uses: actions/checkout@v4
-    - uses: dtolnay/rust-toolchain@stable
-      with:
-        target: x86_64-unknown-linux-gnu
-        toolchain: ${{ matrix.rust }}
-        components: clippy
-    - name: Tests (x86_64)
-      run: |
-        cargo clippy &&
-        cargo test -v --no-default-features --tests --lib &&
-        cargo build --verbose --features "$FEATURES" &&
-        cargo test --verbose --features "$FEATURES" &&
-        cargo test --verbose --release --features "$FEATURES"
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          target: x86_64-unknown-linux-gnu
+          toolchain: ${{ matrix.rust }}
+          components: clippy
+      - name: Tests (x86_64)
+        run: |
+          cargo clippy &&
+          cargo test -v --no-default-features --tests --lib &&
+          cargo build --verbose --features "$FEATURES" &&
+          cargo test --verbose --features "$FEATURES" &&
+          cargo test --verbose --release --features "$FEATURES"
 
   # Ensure the crate builds on x86
   build_MSRV:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        rust: [1.56.0]
+        rust: [1.96.0]
         features: ["+avx2", "+sse2"]
     env:
       RUSTFLAGS: "-C target-feature=${{matrix.features}}"
     steps:
-    - uses: actions/checkout@v4
-    - uses: dtolnay/rust-toolchain@stable
-      with:
-        target: x86_64-unknown-linux-gnu
-        toolchain: ${{ matrix.rust }}
-        components: clippy
-    - name: Tests (x86_64)
-      run: |
-        cargo clippy &&
-        cargo test -v --no-default-features --tests --lib &&
-        cargo build --verbose --features "$FEATURES" &&
-        cargo test --verbose --features "$FEATURES" &&
-        cargo test --verbose --release --features "$FEATURES"
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          target: x86_64-unknown-linux-gnu
+          toolchain: ${{ matrix.rust }}
+          components: clippy
+      - name: Tests (x86_64)
+        run: |
+          cargo clippy &&
+          cargo test -v --no-default-features --tests --lib &&
+          cargo build --verbose --features "$FEATURES" &&
+          cargo test --verbose --features "$FEATURES" &&
+          cargo test --verbose --release --features "$FEATURES"
 
   # Ensure the crate builds on ARM
   build_aarch64:
@@ -69,19 +69,19 @@ jobs:
     env:
       RUSTFLAGS: "-C target-feature=${{matrix.features}} -D warnings"
     steps:
-    - uses: actions/checkout@v4
-    - uses: dtolnay/rust-toolchain@stable
-      with:
-        target: aarch64-apple-darwin
-        toolchain: ${{ matrix.rust }}
-        components: clippy
-    - name: Tests (aarch64)
-      run: |
-        cargo clippy &&
-        cargo test -v --no-default-features --tests --lib &&
-        cargo build --verbose --features "$FEATURES" &&
-        cargo test --verbose --features "$FEATURES" &&
-        cargo test --verbose --release --features "$FEATURES"
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          target: aarch64-apple-darwin
+          toolchain: ${{ matrix.rust }}
+          components: clippy
+      - name: Tests (aarch64)
+        run: |
+          cargo clippy &&
+          cargo test -v --no-default-features --tests --lib &&
+          cargo build --verbose --features "$FEATURES" &&
+          cargo test --verbose --features "$FEATURES" &&
+          cargo test --verbose --release --features "$FEATURES"
 
   # Enforce rustfmt formatting
   formatting:
@@ -91,14 +91,14 @@ jobs:
         # Run formatting checks only on stable
         rust: [stable]
     steps:
-    - uses: actions/checkout@v4
-    - uses: dtolnay/rust-toolchain@stable
-      with:
-        toolchain: ${{ matrix.rust }}
-        components: rustfmt
-    - name: Run Clippy
-      run: |
-        cargo fmt --all --check
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ matrix.rust }}
+          components: rustfmt
+      - name: Run Clippy
+        run: |
+          cargo fmt --all --check
 
   # Ensure the benchmarks compile
   benchmark_compiles:
@@ -108,15 +108,15 @@ jobs:
         # Check builds only on stable
         rust: [stable]
     steps:
-    - uses: actions/checkout@v4
-    - uses: dtolnay/rust-toolchain@stable
-      with:
-        toolchain: ${{ matrix.rust }}
-        components: clippy
-    - name: Run Clippy
-      run: |
-        cd benches
-        cargo bench --bench benches --no-run
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ matrix.rust }}
+          components: clippy
+      - name: Run Clippy
+        run: |
+          cd benches
+          cargo bench --bench benches --no-run
 
   build-wasm:
     runs-on: ubuntu-latest
@@ -140,10 +140,10 @@ jobs:
         # Check builds only on nightly
         rust: [nightly]
     steps:
-    - uses: actions/checkout@v4
-    - uses: dtolnay/rust-toolchain@stable
-      with:
-        toolchain: ${{ matrix.rust }}
-        components: miri
-    - name: Run miri
-      run: cargo miri test
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ matrix.rust }}
+          components: miri
+      - name: Run miri
+        run: cargo miri test
