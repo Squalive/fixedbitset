@@ -5,7 +5,7 @@ A simple fixed size bitset container for Rust.
 
 Please read the [API documentation here](https://docs.rs/fixedbitset/)
 
-[![build\_status](https://github.com/petgraph/fixedbitset/actions/workflows/rust.yml/badge.svg)](https://github.com/petgraph/fixedbitset/actions)
+[![build\_status](https://github.com/Squalive/fixedbitset/actions/workflows/rust.yml/badge.svg)](https://github.com/Squalive/fixedbitset/actions)
 [![crates](https://img.shields.io/crates/v/fixedbitset.svg)](https://crates.io/crates/fixedbitset)
 
 # Recent Changes
