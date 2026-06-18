@@ -179,6 +179,7 @@ impl<'a> FixedBitCell<'a> {
     /// `bit` must be less than `self.len()`
     #[inline]
     pub unsafe fn contains_unchecked(self, bit: usize) -> bool {
+        debug_assert!(bit < self.bits, "{bit} < {} does not hold up", self.bits);
         let (block, i) = div_rem(bit, Block::BITS as usize);
         // SAFETY: Caller ensures safety
         (unsafe { self.get_unchecked(block) } & (1 << i)) != 0
@@ -442,6 +443,7 @@ impl<'a> FixedBitCell<'a> {
     /// `bit` must be less than `self.len()`
     #[inline]
     pub unsafe fn set_unchecked(self, bit: usize, enabled: bool) {
+        debug_assert!(bit < self.bits, "{bit} < {} does not hold up", self.bits);
         let (block, i) = div_rem(bit, Block::BITS as usize);
         // SAFETY: The above assertion ensures that the block is inside the Vec's allocation.
         let elt = unsafe { self.get_unchecked_mut(block) };
@@ -475,6 +477,7 @@ impl<'a> FixedBitCell<'a> {
     /// `bit` must be less than `self.len()`
     #[inline]
     pub unsafe fn insert_unchecked(self, bit: usize) {
+        debug_assert!(bit < self.bits, "{bit} < {} does not hold up", self.bits);
         let (block, i) = div_rem(bit, Block::BITS as usize);
         // SAFETY: The above assertion ensures that the block is inside the Vec's allocation.
         unsafe {
@@ -505,6 +508,7 @@ impl<'a> FixedBitCell<'a> {
     /// `bit` must be less than `self.len()`
     #[inline]
     pub unsafe fn remove_unchecked(self, bit: usize) {
+        debug_assert!(bit < self.bits, "{bit} < {} does not hold up", self.bits);
         let (block, i) = div_rem(bit, Block::BITS as usize);
         // SAFETY: The above assertion ensures that the block is inside the Vec's allocation.
         unsafe {
@@ -533,6 +537,7 @@ impl<'a> FixedBitCell<'a> {
     /// `bit` must be less than `self.len()`
     #[inline]
     pub unsafe fn put_unchecked(self, bit: usize) -> bool {
+        debug_assert!(bit < self.bits, "{bit} < {} does not hold up", self.bits);
         let (block, i) = div_rem(bit, Block::BITS as usize);
         // SAFETY: The above assertion ensures that the block is inside the Vec's allocation.
         unsafe {
@@ -566,6 +571,7 @@ impl<'a> FixedBitCell<'a> {
     /// `bit` must be less than `self.len()`
     #[inline]
     pub unsafe fn toggle_unchecked(self, bit: usize) {
+        debug_assert!(bit < self.bits, "{bit} < {} does not hold up", self.bits);
         let (block, i) = div_rem(bit, Block::BITS as usize);
         // SAFETY: The above assertion ensures that the block is inside the Vec's allocation.
         unsafe {
